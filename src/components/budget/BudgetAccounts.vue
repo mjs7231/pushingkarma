@@ -4,12 +4,12 @@
     <p>Add all accounts that you plan to upload .qfx files for. Each bank should
       provide a unique FID that you can see by opening the file. This is used to
       determine the bank the data originated when uploading transactions.</p>
-    <div v-click-outside='cancelAll'>
+    <div v-click-outside='_cancelall'>
       <b-table :data='tabledata' narrowed ref='table' tabindex='-1'>
         <template slot-scope='props'>
           <b-table-column v-for='cell in props.row' :key='cell.col.name' v-bind='cell.col'>
-            <TableCell v-bind='cell' :ref='`c${cell.tabindex}`' :key='cell.row.id'
-              @click.native='clickSetFocus($event, cell.tabindex)'/>
+            <TableCell v-bind='cell' :ref='`c${cell.tabindex}`' :key='cell.row.id' @action='action'/>
+              <!-- @click.native='clickSetFocus($event, cell.tabindex)'/> -->
           </b-table-column>
         </template>
         <template slot='empty'>No items to display.</template>
@@ -28,6 +28,7 @@
   import * as pathify from 'vuex-pathify';
   import * as utils from '@/utils/utils';
   import TableMixin from '@/components/TableMixin';
+  import {TYPES} from '@/components/TableMixin';
   import Vue from 'vue';
 
   export default {
@@ -36,12 +37,12 @@
     data: function() {
       return {
         columns: [
-          {label:'Name', field:'name', editable:true, width:'160px'},
-          {label:'FID', field:'fid', editable:true, select:true, width:'160px'},
-          {label:'Payee Field', field:'payee', editable:true, width:'160px'},
-          {label:'Last Updated', field:'balancedt', width:'140px', display:utils.timeAgo},
-          {label:'Transactions', field:'meta.num_transactions', width:'150px', numeric:true, display:utils.intComma},
-          {label:'Balance', field:'balance', width:'150px', cls:'blur', numeric:true, display:utils.usd, opts:{color:true}},
+          {type:TYPES.editable, label:'Name', field:'name', width:'160px'},
+          {type:TYPES.editable, label:'FID', field:'fid', select:true, width:'160px'},
+          {type:TYPES.editable, label:'Payee Field', field:'payee', width:'160px'},
+          {type:TYPES.readonly, label:'Last Updated', field:'balancedt', width:'140px', display:utils.timeAgo},
+          {type:TYPES.readonly, label:'Transactions', field:'meta.num_transactions', width:'150px', numeric:true, display:utils.intComma},
+          {type:TYPES.readonly, label:'Balance', field:'balance', width:'150px', cls:'blur', numeric:true, display:utils.usd, opts:{color:true}},
         ],
       };
     },
@@ -58,19 +59,36 @@
       // that this function is called anytime a cell value changed, but depending
       // on the state of row.id or row.name we may be creating or deleting the
       // the account data.
-      save: async function(id, rowindex, field, newvalue, cell=null, refresh=false) {
-        if (id == null && field == 'name' && newvalue != '') { return this.create(newvalue); }
-        if (id == null && field == 'name' && newvalue == '') { return this.refresh(); }
+      // save: async function(id, rowindex, field, newvalue, cell=null, refresh=false) {
+      //   if (id == null && field == 'name' && newvalue != '') { return this.create(newvalue); }
+      //   if (id == null && field == 'name' && newvalue == '') { return this.refresh(); }
+      //   try {
+      //     var change = utils.rset({}, field, newvalue);
+      //     var {data} = await api.Budget.patchAccount(id, change);
+      //     Vue.set(this.items, rowindex, data);
+      //     if (cell) { cell.setStatus('success', 1000); }
+      //     if (refresh) { this.refresh(); }
+      //     return data;
+      //   } catch(err) {
+      //     if (cell) { cell.setStatus('error'); }
+      //     utils.snackbar(`Error saving account.`);
+      //     console.log(err);
+      //     return err;
+      //   }
+      // },
+
+      // Save (action)
+      // Save a new value to the database
+      // Options: {id, field, newvalue, (callback)}
+      _save: async function(opts) {
         try {
-          var change = utils.rset({}, field, newvalue);
-          var {data} = await api.Budget.patchAccount(id, change);
-          Vue.set(this.items, rowindex, data);
-          if (cell) { cell.setStatus('success', 1000); }
-          if (refresh) { this.refresh(); }
+          var change = utils.rset({}, opts.field, opts.newvalue);
+          var {data} = await api.Budget.patchAccount(opts.id, change);
+          this.updateItem(opts.id, data);
+          if (opts.callback) { opts.callback({'status':'success', data:data}); }
         } catch(err) {
-          if (cell) { cell.setStatus('error'); }
           utils.snackbar(`Error saving account.`);
-          console.log(err);
+          if (opts.callback) { opts.callback({'status':'error', error:err}); }
         }
       },
 

@@ -1,11 +1,18 @@
 <template>
-  <div class='tablecell' :class='[status,{focused,editing}]' :style='{"max-width":col.width}'>
+  <div class='tablecell' :class='[status,{focused,editing}]' :style='{"max-width":col.width}' tabindex='-1'
+      @keydown.up='navigate($event, "up")' @keydown.down='navigate($event, "down")'
+      @keydown.left='navigate($event, "left")' @keydown.right='navigate($event, "right")'
+      @click='click' @keydown.esc='esc' @keydown.enter='enter'>
+    <!-- Toggle Cell -->
     <div v-if='col.cls=="check"' @mousedown='preventDoubleClick' ref='div' tabindex='-1' :style='{"min-width":col.width}'>
-      <i v-if='value' class='mdi mdi-check'/></div>
+      <i v-if='value' class='mdi mdi-check'/>
+    </div>
+    <!-- Readonly, Editable, Choice Cells -->
     <div v-else v-html='html' :contenteditable='contenteditable' ref='div' :style='{"min-width":col.width}'
-      spellcheck='false' @input="text=$event.target.textContent" tabindex='-1'
-      @keyup.up.prevent='moveChoice(-1)' @keyup.down.prevent='moveChoice(+1)'
-      @keydown.enter='makeChoice'/>
+        spellcheck='false' @input="text=$event.target.textContent" tabindex='-1'
+        @mousedown='preventDoubleClick'/>
+      <!-- @keyup.up.prevent='moveChoice(-1)' @keyup.down.prevent='moveChoice(+1)' @keydown.enter='makeChoice'/> -->
+    <!-- Choice Dropdown -->
     <ul v-if='contenteditable && (choices.length > 0)' class='choices' :style='{"min-width":col.width}'>
       <li v-for='(c,i) in choices' :key='c.id' class='choice' :class='{highlighted:i==choice}' @click='makeChoice'>{{c.name}}</li>
     </ul>
@@ -16,7 +23,6 @@
   import * as utils from '@/utils/utils';
   import fuzzysort from 'fuzzysort';
   import trim from 'lodash/trim';
-  var CANNOT_FREE_EDIT = ['check'];
 
   export default {
     name: 'TableCell',
@@ -38,7 +44,8 @@
       contenteditable: function() { return this.focused && this.editing; },     // True if currently editable
       item: function() { return this.row; },                                    // Alias for this.row
       value: function() { return utils.rget(this.row, this.col.field); },       // Raw value for this cell
-      editable: function() { return this.col.editable && !CANNOT_FREE_EDIT.includes(this.col.cls); },
+      editable: function() { return this.col.type.editable; },
+      focusable: function() { return this.col.type.focusable; },
       html: function() {
         if (this.col.opts) { return this.col.display(this.value, this.col.opts); }
         if (this.col.display) { return this.col.display(this.value); }
@@ -54,19 +61,47 @@
         this.choices = this.filterChoices(text);
         this.choice = 0;
       },
+      status: async function() {
+        await utils.sleep(1000);
+        this.status = 'fadestatus';
+        await utils.sleep(1000);
+        this.status = 'default';
+      },
     },
     methods: {
-      // Filter Choices
-      // Filter available choices based on passed in text
-      filterChoices: function(text) {
-        if (!this.contenteditable) { return []; }
-        if (!this.col.choices) { return []; }
-        if (this.text == '') { return []; }
-        var lchoices = this.col.choices.map(c => c.name.toLowerCase());
-        if (!text || text == '') { return this.col.choices; }
-        if (lchoices.indexOf(text.toLowerCase()) >= 0) { return []; }
-        var result = fuzzysort.go(text, this.col.choices, {key:'name'});
-        return result.map(x => x.obj);
+      // Click
+      // User clicked on the cell
+      click: function(event) {
+        if (!this.focused && this.focusable) {
+          event.preventDefault();
+          this.$emit('action', 'focus', {tabindex:this.tabindex});
+        } else if (this.focused && !this.editing && this.editable) {
+          event.preventDefault();
+          this.$emit('action', 'edit', {tabindex:this.tabindex});
+        }
+      },
+
+      // Enter
+      // User pressed enter on the cell
+      enter: async function(event) {
+        if (this.focused && !this.editing && this.editable) {
+          // Start Editing
+          event.preventDefault();
+          this.$emit('action', 'edit', this);
+        } else if (this.editing) {
+          // Save the new value
+          event.preventDefault();
+          this.save();
+        }
+      },
+
+      // Esc
+      // User pressed the escape on the cell
+      esc: function(event) {
+        if (this.focused || this.editing) {
+          event.preventDefault();
+          this.$emit('action', 'cancel');
+        }
       },
 
       // Focus
@@ -80,8 +115,56 @@
           if (!this.col.select) { range.collapse(false); }
           selection.removeAllRanges();
           selection.addRange(range);
-          this.$refs.div.focus();
+          this.$el.focus();
         }
+      },
+
+      // Navigate
+      // Move the focus up, down, left, or right
+      navigate: function(event, dir) {
+        if (!this.editing) {
+          event.preventDefault();
+          this.$emit('action', 'navigate', {dir});
+        }
+      },
+
+      // Prevent Double Click
+      // Checkmark cells need this to quickly toggle the value but
+      // it often also selects a word of text which is annoying.
+      preventDoubleClick: function(event) {
+        if (event.detail > 1) { event.preventDefault(); }
+      },
+
+      // Save
+      // Save a new value to the database
+      save: function() {
+        var oldvalue = utils.textContent(this.html);
+        if (oldvalue != this.text) {
+          this.$emit('action', 'save', {
+            id: this.row.id,
+            field: this.col.field,
+            newvalue: this.text,
+            callback: (result) => {
+              console.log(result);
+              this.status = result.status;
+              this.$emit('action', 'navigate', {dir:'down'});
+            }
+          });
+        }
+      },
+
+      //-----------------------------------
+      // Filter Choices
+      // Filter available choices based on passed in text
+      filterChoices: function(text) {
+        if (!this.contenteditable) { return []; }
+        if (!this.col.choices) { return []; }
+        if (this.text == '') { return []; }
+        var lchoices = this.col.choices.map(c => c.name.toLowerCase());
+        if (!text || text == '') { return this.col.choices; }
+        if (lchoices.indexOf(text.toLowerCase()) >= 0) { return []; }
+        var result = fuzzysort.go(text, this.col.choices, {key:'name'});
+        return result.map(x => x.obj);
       },
 
       // Make Choice
@@ -109,24 +192,6 @@
         this.choice = newchoice;
       },
 
-      // Set Status
-      // Sets visual indicator that saving value was success or error
-      setStatus: async function(status, duration=null) {
-        this.status = status;
-        if (duration !== null) {
-          await utils.sleep(duration);
-          this.status = 'fadestatus';
-          await utils.sleep(1000);
-          this.status = 'default';
-        }
-      },
-
-      // Prevent Double Click
-      // Checkmark cells need this to quickly toggle the value but
-      // it often also selects a word of text which is annoying.
-      preventDoubleClick: function(event) {
-        if (event.detail > 1) { event.preventDefault(); }
-      },
     },
   };
 </script>
@@ -157,7 +222,7 @@
     
     // Focused & Editing
     &.fadestatus div { transition: all 2s ease !important; }
-    &.focused {
+    &:focus {  // .focused {
       div {
         background-color: darken($lightbg-bg1, 3%);
         border: 1px solid darken($lightbg-bg2, 8%);
@@ -172,6 +237,9 @@
         color: darken($lightbg-blue0, 50%);
         box-shadow: 0 0 0 2px rgba(7, 102, 120, 0.25);
       }
+    }
+    &:focus {
+      border: 1px solid black;
     }
 
     // Success & Error
